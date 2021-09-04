@@ -8,7 +8,7 @@ class JsonParser
 {
 public:
     enum Type{INT,STRING,OBJECT,ARRAY};
-    JsonParser(std::string* message,Type type=OBJECT)
+    JsonParser(std::string* message,Type type=OBJECT,bool checkEnd=true,std::string::iterator *beginPtr=nullptr,std::string::iterator *endPtr=nullptr)
     {
         this->type=type;
         if (type==INT)
@@ -21,18 +21,18 @@ public:
             this->messageStr=message;
             return;
         }
-        auto begin=message->begin();
+        auto begin=!checkEnd?*beginPtr:message->begin();
         auto end=message->end()-1;
         moveForwardPtr<' ','\n'>(begin,message->end());
-        moveBackwardPtr<' ','\n'>(end,message->begin());
-        if ((*begin=='{'&&*end=='}')||(*begin=='['&&*end==']'))
+        if (checkEnd)
+            moveBackwardPtr<' ','\n'>(end,message->begin());
+        if ((*begin=='{'&&(!checkEnd||*end=='}'))||(*begin=='['&&(!checkEnd||*end==']')))
         {
             this->type=*begin=='['?ARRAY:OBJECT;
             begin+=1;
             std::string::iterator tail,head;
             while (true)
             {
-
                 if (this->type!=ARRAY)
                 {
                 moveForwardPtr<' ','\n'>(begin,end);
@@ -77,29 +77,15 @@ public:
                     else
                         json[std::string(head,tail)]=new JsonParser(new std::string(contentHead,contentTail),STRING);
                     begin++;
-
+                    if (((*begin==']'&&this->type==ARRAY)||(*begin=='}'&&this->type==OBJECT))&&!checkEnd)
+                    {
+                        *endPtr=begin+1;
+                        return;
+                    }
                 }
                 else if (*begin=='{')
                 {
-                    auto contentHead=begin;
-                    JsonParser* newJson;
-                    while (true)
-                    {
-                        moveForwardPtr<'}'>(begin,end,false);
-                        if (begin==end)
-                            throw  std::runtime_error("illegal syntax");
-                        begin++;
-
-                        std::string *tempStr;
-                        try {
-                            tempStr=new std::string(contentHead,begin);
-                            newJson=new JsonParser(tempStr);
-                        } catch (...) {
-                            delete tempStr;
-                            continue;
-                        }
-                        break;
-                    }
+                    JsonParser* newJson=new JsonParser(message,OBJECT,false,&begin,&begin);
                     if (this->type==ARRAY)
                         jsonArray.push_back(newJson);
                     else
@@ -107,31 +93,13 @@ public:
                 }
                 else if (*begin=='[')
                 {
-                    auto contentHead=begin;
-                    JsonParser* newJson;
-                    while (true)
-                    {
-                        moveForwardPtr<']'>(begin,end,false);
-                        if (begin==end)
-                            throw  std::runtime_error("illegal syntax");
-                        begin++;
-                        std::string *tempStr;
-                        try {
-                            tempStr=new std::string(contentHead,begin);
-                            newJson=new JsonParser(tempStr);
-                        } catch (...) {
-                            delete tempStr;
-                            continue;
-                        }
-                        break;
-                    }
+                    JsonParser* newJson=new JsonParser(message,OBJECT,false,&begin,&begin);
                     if (this->type==ARRAY)
                         jsonArray.push_back(newJson);
                     else
                         json[std::string(head,tail)]=newJson;
                 }
-                else
-                {
+                else{
                     auto contentHead=begin;
                     moveForwardPtr<'0','1','2','3','4','5','6','7','8','9'>(begin,end);
                     auto contentTail=begin;
@@ -140,14 +108,16 @@ public:
                     else
                         json[std::string(head,tail)]=new JsonParser(new std::string(contentHead,contentTail),INT);
                 }
-
                 moveForwardPtr<' ','\n'>(begin,end);
                 if (*begin==',')
                     begin++;
-                else if (!((*begin=='}'&&this->type==OBJECT)||(*begin==']'&&this->type==ARRAY)))
+                else if ((!((*begin=='}'&&this->type==OBJECT)||(*begin==']'&&this->type==ARRAY)))&&checkEnd)
                     throw  std::runtime_error("illegal syntax");
-                if (*begin==',')
-                    begin++;
+                else if (((*begin=='}'&&this->type==OBJECT)||(*begin==']'&&this->type==ARRAY))&&!checkEnd)
+                {
+                    *endPtr=begin+1;
+                    return;
+                }
             }
         }
         else
@@ -171,7 +141,7 @@ public:
             throw std::runtime_error("illegal operation");
         return messsageInt;
     }
-    void foreach(std::function<void(JsonParser)> function)
+    void foreach(std::function<void(JsonParser&)> function)
     {
         if (this->type!=ARRAY)
             throw std::runtime_error("illegal operation");
@@ -179,6 +149,36 @@ public:
             function(*obj);
     }
     Type type;
+    operator std::string()
+    {
+        if (this->type==STRING)
+            return "\""+this->toString()+"\"";
+        else if (this->type==INT)
+            return std::to_string(this->toInt());
+        else if (this->type==ARRAY){
+            std::string result="[";
+            this->foreach([&](JsonParser& json){
+                 if (result=="[")
+                          result+=json;
+                 else
+                          result+=std::string(",")+(std::string)json;
+        });
+            result+="]";
+            return result;
+        }
+        else{
+            std::string result="{";
+            for (auto &&it:json)
+            {
+                if (result=="{")
+                    result+="\""+it.first+"\":"+(std::string)*(it.second);
+                else
+                    result+=std::string(",")+"\""+it.first+"\":"+(std::string)*(it.second);
+            }
+            result+="}";
+            return result;
+        }
+    }
 private:
     template<char... ch>
     static inline void moveForwardPtr(std::string::iterator& pos,std::string::iterator end,bool equal=true)
